@@ -59,7 +59,7 @@ static void print_key(uint32_t guess[KEY_LEN/sizeof(uint32_t)], int knownlen) {
 }
 
 int find_key(int fd, uint32_t guess[KEY_LEN/sizeof(uint32_t)], int idx, uint8_t partial[AES_BLOCK_SIZE], uint32_t start, uint32_t end) {
-  gcry_cipher_hd_t ctx;
+  aes_context aes;
   uint8_t zeros[AES_BLOCK_SIZE];
   uint8_t tmp[AES_BLOCK_SIZE];
   status_t st;
@@ -67,11 +67,10 @@ int find_key(int fd, uint32_t guess[KEY_LEN/sizeof(uint32_t)], int idx, uint8_t 
   memset(guess, 0, KEY_LEN);
   memset(zeros, 0, sizeof(zeros));
   st.found = 0;
-  gcry_cipher_open(&ctx, GCRY_CIPHER_AES256, GCRY_CIPHER_MODE_ECB, 0);
   for (st.at = start; st.at < end; st.at++) {
     guess[idx] = st.at;
-    gcry_cipher_setkey(ctx, guess, KEY_LEN);
-    gcry_cipher_encrypt(ctx, tmp, sizeof(tmp), zeros, sizeof(zeros));
+    aes_init(&aes, (const uint8_t*)guess, 256);
+    aes_ecb_encrypt(&aes, zeros, tmp);
     if (memcmp(tmp, partial, AES_BLOCK_SIZE) == 0) {
       st.found = 1;
       goto end;
@@ -84,15 +83,14 @@ int find_key(int fd, uint32_t guess[KEY_LEN/sizeof(uint32_t)], int idx, uint8_t 
   }
   // last one
   guess[idx] = st.at;
-  gcry_cipher_setkey(ctx, guess, KEY_LEN);
-  gcry_cipher_encrypt(ctx, tmp, sizeof(tmp), zeros, sizeof(zeros));
+  aes_init(&aes, (const uint8_t*)guess, 256);
+  aes_ecb_encrypt(&aes, zeros, tmp);
   if (memcmp(tmp, partial, AES_BLOCK_SIZE) == 0) {
     st.found = 1;
   }
 end:
   write_block(fd, &st, sizeof(st));
   close(fd);
-  gcry_cipher_close(ctx);
   return st.found;
 }
 

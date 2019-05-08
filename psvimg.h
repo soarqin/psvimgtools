@@ -8,6 +8,12 @@
 
 #include <stdint.h>
 
+#ifdef __GNUC__
+#define ATTR_PACKED __attribute__((packed))
+#else
+#define ATTR_PACKED
+#endif
+
 #define PSVMD_CONTENT_MAGIC (0xFEE1900D)
 #define PSVMD_BACKUP_MAGIC (0xFEE1900E)
 #define PSVIMG_ENDOFHEADER "EndOfHeader\n"
@@ -93,6 +99,7 @@ enum {
 #define SCE_SO_ISREG(m) (((m) & SCE_SO_IFMT) == SCE_SO_IFREG)
 #define SCE_SO_ISDIR(m) (((m) & SCE_SO_IFMT) == SCE_SO_IFDIR)
 
+#pragma pack(push, 1)
 typedef struct SceDateTime {
     uint16_t year;
     uint16_t month;
@@ -101,7 +108,7 @@ typedef struct SceDateTime {
     uint16_t minute;
     uint16_t second;
     uint32_t microsecond;
-} __attribute__((packed)) SceDateTime;
+} ATTR_PACKED SceDateTime;
 
 /** Structure to hold the status information about a file */
 typedef struct SceIoStat {
@@ -117,7 +124,7 @@ typedef struct SceIoStat {
   SceDateTime sst_mtime;
   /** Device-specific data. */
   uint32_t  sst_private[6];
-} __attribute__((packed)) SceIoStat;
+} ATTR_PACKED SceIoStat;
 
 #define PSVMD_FW_1_00 (0x01000000)
 
@@ -136,7 +143,7 @@ typedef struct PsvMd {
   uint64_t unused_98;
   uint64_t unused_A0;
   uint32_t add_data;
-} __attribute__((packed)) PsvMd_t;
+} ATTR_PACKED PsvMd_t;
 
 /** This file (and backup) can only be restored with the same PSID */
 #define PSVIMG_HEADER_FLAG_CONSOLE_UNIQUE (0x1)
@@ -150,7 +157,7 @@ typedef struct PsvImgHeader {
   char      path_rel[256];
   char      unused[904];
   char      end[12];
-} __attribute__((packed)) PsvImgHeader_t;
+} ATTR_PACKED PsvImgHeader_t;
 
 /** The file/directory will be _removed_ (not restored). */
 #define PSVIMG_TAILER_FLAG_REMOVE (0x1)
@@ -159,6 +166,7 @@ typedef struct PsvImgTailer {
   uint64_t  flags;
   char      unused[1004];
   char      end[12];
-} __attribute__((packed)) PsvImgTailer_t;
+} ATTR_PACKED PsvImgTailer_t;
+#pragma pack(pop)
 
 #endif

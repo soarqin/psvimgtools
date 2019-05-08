@@ -3,15 +3,33 @@
  * This software may be modified and distributed under the terms
  * of the MIT license.  See the LICENSE file for details.
  */
+#ifdef _MSC_VER
+#include "dirent_win32.h"
+#include <io.h>
+#else
+#include <utime.h>
+#include <dirent.h>
+#include <unistd.h>
+#endif
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(n, m) _mkdir(n)
+#else
+#define O_BINARY 0
+#endif
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
 #include <utime.h>
+#ifdef USE_MINIZ
+#include "miniz.h"
+#else
 #include <zlib.h>
+#endif
 #include "crypto.h"
 #include "endian-utils.h"
 #include "restore.h"
@@ -30,7 +48,8 @@ static void print_hash(const char *title, uint8_t hash[SHA256_BLOCK_SIZE]) {
 
 void *decrypt_thread(void *pargs) {
   args_t *args = (args_t *)pargs;
-  SHA256_CTX ctx, tmp;
+  sha256_context ctx, tmp;
+  aes_context aes;
   uint8_t iv[AES_BLOCK_SIZE];
   uint8_t next_iv[AES_BLOCK_SIZE];
   uint8_t hash[SHA256_BLOCK_SIZE];
@@ -44,14 +63,16 @@ void *decrypt_thread(void *pargs) {
   }
 
   // decrypt blocks
+  aes_init_dec(&aes, args->key, 256);
   sha256_init(&ctx);
+  sha256_starts(&ctx);
   total = AES_BLOCK_SIZE;
   while ((rd = read_block(args->in, buffer, sizeof(buffer))) > 0) {
     // save next iv
     memcpy(next_iv, &buffer[rd - AES_BLOCK_SIZE], AES_BLOCK_SIZE);
 
     // decrypt
-    aes256_cbc_decrypt(buffer, args->key, iv, rd / AES_BLOCK_SIZE);
+    aes_cbc_decrypt(&aes, iv, buffer, rd, buffer);
 
     if (rd != sizeof(buffer)) {
       total += rd;
@@ -251,7 +272,7 @@ static int write_file(PsvImgHeader_t *header, int in_fd, const char *prefix) {
   if (stat(full_parent, &st) < 0) {
     mkdir(full_parent, 0700);
     snprintf(full_path, MAX_PATH_LEN, "%s/%s", full_parent, "VITA_PATH.TXT");
-    fd = open(full_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = open(full_path, O_WRONLY | O_CREAT | O_BINARY | O_TRUNC, 0644);
     write_block(fd, header->path_parent, strnlen(header->path_parent, 256)+1);
     close(fd);
   }
@@ -262,7 +283,7 @@ static int write_file(PsvImgHeader_t *header, int in_fd, const char *prefix) {
   }
   snprintf(full_path, MAX_PATH_LEN, "%s/%s", full_parent, header->path_rel);
   if (SCE_S_ISREG(le32toh(header->stat.sst_mode))) {
-    fd = open(full_path, O_WRONLY | O_CREAT | O_TRUNC, scemode_to_posix(le32toh(header->stat.sst_mode)));
+    fd = open(full_path, O_WRONLY | O_CREAT | O_BINARY | O_TRUNC, scemode_to_posix(le32toh(header->stat.sst_mode)));
     if (copy_block(fd, in_fd, le64toh(header->stat.sst_size)) < le64toh(header->stat.sst_size)) {
       fprintf(stderr, "error extracting %s\n", full_path);
       close(fd);

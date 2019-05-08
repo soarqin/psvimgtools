@@ -5,10 +5,17 @@
  */
 #include <fcntl.h>
 #include <stdio.h>
+#include <string.h>
+#ifdef _WIN32
+#include "pthread_win32.h"
+#define pipe(fds) _pipe(fds, 0x100000, O_BINARY)
+#else
+#include <pthread.h>
 #include <unistd.h>
+#define O_BINARY 0
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include "restore.h"
 #include "utils.h"
 
@@ -16,60 +23,51 @@ int main(int argc, const char *argv[]) {
   args_t args1, args2;
   struct stat st;
   int fds[2];
-  pid_t pid;
-  int status;
+  pthread_t pth1, pth2;
 
   if (argc < 5) {
-    fprintf(stderr, "usage: psvmd-decrypt -K key input.psvmd output\n");
+    fprintf(stderr, "usage: psvmd-decrypt [-A aid | -K key] input.psvmd output\n");
     return 1;
   }
 
   if (pipe(fds) < 0) {
-    perror("pipe");
+    fprintf(stderr, "pipe\n");
     return 1;
   }
 
-  args1.in = open(argv[3], O_RDONLY);
+  args1.in = open(argv[3], O_RDONLY | O_BINARY);
   if (args1.in < 0) {
-    perror("input");
+    fprintf(stderr, "input\n");
     return 1;
   }
   args1.out = fds[1];
   args2.in = fds[0];
-  args2.out = open(argv[4], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  args2.out = open(argv[4], O_WRONLY | O_CREAT | O_BINARY | O_TRUNC, 0644);
   if (args2.out < 0) {
-    perror("output");
+    fprintf(stderr, "output\n");
     return 1;
   }
 
-  if (parse_key(argv[2], args1.key) < 0) {
-    fprintf(stderr, "invalid key\n");
-    return 1;
-  }
-
-  if ((pid = fork()) == 0) {
-    close(args1.in);
-    close(args1.out);
-    decompress_thread(&args2);
-    return 0;
-  } else if (pid > 0) {
-    close(args2.in);
-    close(args2.out);
-    decrypt_thread(&args1);
+  if (strcmp(argv[1], "-K") == 0) {
+    if (parse_key(argv[2], args1.key) < 0) {
+      fprintf(stderr, "invalid key\n");
+      return 1;
+    }
+  } else if (strcmp(argv[1], "-A") == 0) {
+    if (generate_key_from_aid(argv[2], args1.key) < 0) {
+      fprintf(stderr, "invalid aid\n");
+      return 1;
+    }
   } else {
-    perror("fork");
+    fprintf(stderr, "you must specify either -A or -K!\n");
     return 1;
   }
 
-  if (waitpid(pid, &status, 0) < 0) {
-    perror("waitpid");
-    return 1;
-  }
+  pthread_create(&pth1, NULL, decompress_thread, &args2);
+  pthread_create(&pth2, NULL, decrypt_thread, &args1);
 
-  if (!WIFEXITED(status)) {
-    fprintf(stderr, "child process returned error\n");
-    return 1;
-  }
+  pthread_join(pth2, NULL);
+  pthread_join(pth1, NULL);
 
   fprintf(stderr, "all done.\n");
 

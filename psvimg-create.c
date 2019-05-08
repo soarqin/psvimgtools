@@ -6,11 +6,19 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include "pthread_win32.h"
+#include <direct.h>
+#define mkdir(n, m) _mkdir(n)
+#define pipe(fds) _pipe(fds, 0x100000, O_BINARY)
+#else
+#include <pthread.h>
 #include <unistd.h>
+#define O_BINARY 0
+#endif
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <time.h>
 #include "backup.h"
 #include "psvimg.h"
@@ -39,11 +47,10 @@ int main(int argc, const char *argv[]) {
   char path[MAX_PATH_LEN];
   int mfd;
   PsvMd_t md;
-  pid_t pid;
-  int status;
+  pthread_t pth1, pth2;
 
   if (argc < 7) {
-    fprintf(stderr, "usage: psvimg-create [-m metadata|-n name] -K key inputdir outputdir\n");
+    fprintf(stderr, "usage: psvimg-create [-m metadata|-n name] [-A aid | -K key] inputdir outputdir\n");
     fprintf(stderr, "  specify either a decrypted metadata file as a template or\n");
     fprintf(stderr, "  a name and other metadata fields will retain default values\n");
     return 1;
@@ -51,9 +58,9 @@ int main(int argc, const char *argv[]) {
 
   // TODO: support more types
   if (strcmp(argv[1], "-m") == 0) {
-    mfd = open(argv[2], O_RDONLY);
+    mfd = open(argv[2], O_RDONLY | O_BINARY);
     if (mfd < 0) {
-      perror("metadata");
+      fprintf(stderr, "metadata\n");
       return 1;
     }
     if (read_block(mfd, &md, sizeof(md) - sizeof(md.add_data)) < sizeof(md) - sizeof(md.add_data)) {
@@ -88,7 +95,7 @@ int main(int argc, const char *argv[]) {
   }
 
   if (pipe(fds) < 0) {
-    perror("pipe 1");
+    fprintf(stderr, "pipe 1\n");
     return 1;
   }
 
@@ -103,46 +110,38 @@ int main(int argc, const char *argv[]) {
 
   snprintf(path, sizeof(path), "%s/%s.psvimg", argv[6], md.name);
 
-  args2.out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  args2.out = open(path, O_WRONLY | O_CREAT | O_BINARY | O_TRUNC, 0644);
   if (args2.out < 0) {
-    perror("psvimg output");
+    fprintf(stderr, "psvimg output\n");
     return 1;
   }
   args2.in = fds[0];
 
-  if (parse_key(argv[4], args2.key) < 0) {
-    fprintf(stderr, "invalid key\n");
+  if (strcmp(argv[3], "-K") == 0) {
+    if (parse_key(argv[4], args2.key) < 0) {
+      fprintf(stderr, "invalid key\n");
+      return 1;
+    }
+  } else if (strcmp(argv[3], "-A") == 0) {
+    if (generate_key_from_aid(argv[4], args2.key) < 0) {
+      fprintf(stderr, "invalid aid\n");
+      return 1;
+    }
+  } else {
+    fprintf(stderr, "you must specify either -A or -K!\n");
     return 1;
   }
 
   memcpy(args2.iv, md.iv, sizeof(args2.iv));
 
-  if ((pid = fork()) == 0) {
-    close(args1.in);
-    close(args1.out);
-    encrypt_thread(&args2);
-    return 0;
-  } else if (pid > 0) {
-    close(args2.in);
-    close(args2.out);
-    pack_thread(&args1);
-  } else {
-    perror("fork");
-    return 1;
-  }
+  pthread_create(&pth1, NULL, encrypt_thread, &args2);
+  pthread_create(&pth2, NULL, pack_thread, &args1);
 
-  if (waitpid(pid, &status, 0) < 0) {
-    perror("waitpid");
-    return 1;
-  }
-
-  if (!WIFEXITED(status)) {
-    fprintf(stderr, "child process returned error\n");
-    return 1;
-  }
+  pthread_join(pth2, NULL);
+  pthread_join(pth1, NULL);
 
   if (stat(path, &st) < 0) {
-    perror("stat");
+    fprintf(stderr, "stat\n");
     return 1;
   }
   fprintf(stderr, "created %s (size: %llx, content size: %zx)\n", path, st.st_size, args1.content_size);
@@ -153,11 +152,11 @@ int main(int argc, const char *argv[]) {
   snprintf(path, sizeof(path), "%s/%s.psvmd", argv[6], md.name);
 
   if (pipe(fds) < 0) {
-    perror("pipe 2");
+    fprintf(stderr, "pipe 2\n");
     return 1;
   }
   if (pipe(&fds[2]) < 0) {
-    perror("pipe 3");
+    fprintf(stderr, "pipe 3\n");
     return 1;
   }
 
@@ -165,55 +164,30 @@ int main(int argc, const char *argv[]) {
   args1.out = fds[3];
 
   args2.in = fds[2];
-  args2.out = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  args2.out = open(path, O_WRONLY | O_CREAT | O_BINARY | O_TRUNC, 0644);
   if (args2.out < 0) {
-    perror("psvmd output");
+    fprintf(stderr, "psvmd output\n");
     return 1;
   }
   for (int i = 0; i < sizeof(md.iv); i++) {
     args2.iv[i] = rand() % 0xFF;
   }
 
-  if ((pid = fork()) == 0) {
-    close(args1.in);
-    close(args1.out);
-    if ((pid = fork()) == 0) {
-      close(args2.in);
-      close(args2.out);
-      write_block(fds[1], &md, sizeof(md));
-      close(fds[1]);
-      return 0;
-    } else {
-      close(fds[1]);
-    }
-    encrypt_thread(&args2);
-    return 0;
-  } else if (pid > 0) {
-    close(fds[1]);
-    close(args2.in);
-    close(args2.out);
-    compress_thread(&args1);
-  } else {
-    perror("fork");
-    return 1;
-  }
+  pthread_create(&pth1, NULL, encrypt_thread, &args2);
+  pthread_create(&pth2, NULL, compress_thread, &args1);
+  write_block(fds[1], &md, sizeof(md));
+  close(fds[1]);
 
-  if (waitpid(pid, &status, 0) < 0) {
-    perror("waitpid");
-    return 1;
-  }
+  pthread_join(pth2, NULL);
+  pthread_join(pth1, NULL);
 
-  if (!WIFEXITED(status)) {
-    fprintf(stderr, "child process returned error\n");
-    return 1;
-  }
   
   fprintf(stderr, "created %s\n", path);
 
   // finally create the psvinf
   if (is_backup(md.name)) {
     snprintf(path, sizeof(path), "%s/%s.psvinf", argv[6], md.name);
-    mfd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    mfd = open(path, O_WRONLY | O_CREAT | O_BINARY | O_TRUNC, 0644);
     write_block(mfd, md.name, strnlen(md.name, 64) + 1);
     close(mfd);
     fprintf(stderr, "created %s\n", path);

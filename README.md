@@ -4,7 +4,7 @@ This is a set of tools that let you decrypt, extract, and repack Vita CMA backup
 
 ## Building
 
-You should have `cmake` and `zlib` installed. To enable hardware accelerated crypto, make sure `libgcrypt` is installed. Windows users should install either Cygwin or Bash on Ubuntu for Windows.
+You should have `cmake` and `zlib` installed. To enable hardware accelerated crypto, make sure `libgcrypt` is installed. Windows users should use MinGW (MSYS2 suggested).
 
 Then just run
 ```

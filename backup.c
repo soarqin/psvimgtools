@@ -3,17 +3,31 @@
  * This software may be modified and distributed under the terms
  * of the MIT license.  See the LICENSE file for details.
  */
+#ifdef _MSC_VER
+#include "dirent_win32.h"
+#include <io.h>
+#else
+#include <utime.h>
 #include <dirent.h>
+#include <unistd.h>
+#endif
+#ifndef _WIN32
+#define O_BINARY 0
+#endif
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
-#include <unistd.h>
 #include <utime.h>
+#ifdef USE_MINIZ
+#include "miniz.h"
+#else
 #include <zlib.h>
+#endif
 #include "crypto.h"
 #include "backup.h"
 #include "endian-utils.h"
@@ -24,7 +38,8 @@
 
 void *encrypt_thread(void *pargs) {
   args_t *args = (args_t *)pargs;
-  SHA256_CTX ctx, tmp;
+  sha256_context ctx, tmp;
+  aes_context aes;
   uint8_t iv[AES_BLOCK_SIZE];
   uint8_t buffer[PSVIMG_BLOCK_SIZE + SHA256_BLOCK_SIZE + 0x10];
   ssize_t rd;
@@ -39,11 +54,13 @@ void *encrypt_thread(void *pargs) {
 
   // write iv
   memcpy(iv, args->iv, AES_BLOCK_SIZE);
-  aes256_encrypt(iv, args->key);
+  aes_init(&aes, args->key, 256);
+  aes_ecb_encrypt(&aes, iv, iv);
   write_block(args->out, iv, AES_BLOCK_SIZE);
 
   // encrypt blocks
   sha256_init(&ctx);
+  sha256_starts(&ctx);
   footer.data.total = AES_BLOCK_SIZE; // from iv
   footer.data.padding = 0;
   footer.data.unused = 0;
@@ -65,7 +82,7 @@ void *encrypt_thread(void *pargs) {
     }
 
     // encrypt
-    aes256_cbc_encrypt(buffer, args->key, iv, rd / AES_BLOCK_SIZE);
+    aes_cbc_encrypt(&aes, iv, buffer, rd, buffer);
 
     // save next iv
     memcpy(iv, &buffer[rd - AES_BLOCK_SIZE], AES_BLOCK_SIZE);
@@ -85,7 +102,7 @@ void *encrypt_thread(void *pargs) {
   footer.data.total += 0x10;
   footer.data.padding = htole32(footer.data.padding);
   footer.data.total = htole64(footer.data.total);
-  aes256_cbc_encrypt(footer.raw, args->key, iv, 1);
+  aes_cbc_encrypt(&aes, iv, footer.raw, AES_BLOCK_SIZE, footer.raw);
   write_block(args->out, footer.raw, AES_BLOCK_SIZE);
 
 end:
@@ -249,7 +266,7 @@ static ssize_t add_file(int fd, const char *parent, const char *rel, const char 
   if (SCE_S_ISREG(le32toh(header.stat.sst_mode))) {
     fsize = le64toh(header.stat.sst_size);
     printf("packing file %s%s (%llx bytes)...\n", header.path_parent, header.path_rel, fsize);
-    file = open(host, O_RDONLY);
+    file = open(host, O_RDONLY | O_BINARY);
     if (file < 0) {
       fprintf(stderr, "error opening %s\n", host);
       return -1;
@@ -379,7 +396,7 @@ void *pack_thread(void *pargs) {
 
     if (S_ISDIR(st.st_mode)) {
       snprintf(parent_file, sizeof(parent_file), "%s/%s", host, "VITA_PATH.TXT");
-      if ((fd = open(parent_file, O_RDONLY)) < 0) {
+      if ((fd = open(parent_file, O_RDONLY | O_BINARY)) < 0) {
         fprintf(stderr, "WARNING: skipping %s because VITA_PATH.TXT is not found!\n", host);
         continue;
       }
