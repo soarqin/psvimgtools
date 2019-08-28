@@ -281,7 +281,10 @@ static int write_file(PsvImgHeader_t *header, int in_fd, const char *prefix) {
   if (header->path_rel[0] == '\0') {
     strcpy(header->path_rel, "VITA_DATA.BIN");
   }
-  snprintf(full_path, MAX_PATH_LEN, "%s/%s", full_parent, header->path_rel);
+  if (header->path_rel[0] == '/')
+  	snprintf(full_path, MAX_PATH_LEN, "%s%s", full_parent, header->path_rel);
+  else
+  	snprintf(full_path, MAX_PATH_LEN, "%s/%s", full_parent, header->path_rel);
   if (SCE_S_ISREG(le32toh(header->stat.sst_mode))) {
     fd = open(full_path, O_WRONLY | O_CREAT | O_BINARY | O_TRUNC, scemode_to_posix(le32toh(header->stat.sst_mode)));
     if (copy_block(fd, in_fd, le64toh(header->stat.sst_size)) < le64toh(header->stat.sst_size)) {
@@ -302,10 +305,7 @@ static int write_file(PsvImgHeader_t *header, int in_fd, const char *prefix) {
   times.actime = mktime(&tm);
   scetime_to_tm(&header->stat.sst_mtime, &tm);
   times.modtime = mktime(&tm);
-  if (utime(full_path, &times) < 0) {
-    fprintf(stderr, "error setting time\n");
-    return -1;
-  }
+  utime(full_path, &times);
 
   return 0;
 }
